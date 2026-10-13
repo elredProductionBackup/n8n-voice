@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Question Assistant</title>
+<style>
+:root{color-scheme:light;--bg:#f5f7fb;--card:#fff;--text:#172033;--muted:#667085;--line:#e5e9f2;--blue:#2563eb}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+main{width:min(100%,680px);background:var(--card);border:1px solid var(--line);border-radius:20px;padding:clamp(22px,5vw,38px);box-shadow:0 18px 50px #17203314}
+.eyebrow{margin:0 0 8px;color:var(--blue);font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}
+h1{margin:0;font-size:clamp(28px,5vw,38px);letter-spacing:-.04em}.intro{color:var(--muted);line-height:1.6;margin:12px 0 24px}
+.actions{display:flex;flex-wrap:wrap;gap:10px}button{border:0;border-radius:12px;padding:13px 17px;font:inherit;font-weight:700;cursor:pointer}button:disabled{opacity:.45;cursor:not-allowed}
+#startBtn{color:white;background:var(--blue)}#stopBtn{color:white;background:#dc2626}#clearBtn{color:var(--text);background:#eef2f7}
+.status{display:flex;align-items:center;gap:10px;min-height:44px;margin:18px 0 22px;padding:11px 13px;background:#f8fafc;border:1px solid var(--line);border-radius:12px;color:var(--muted);font-size:14px}
+.dot{width:9px;height:9px;border-radius:50%;background:#98a2b3;flex:none}.dot.live{background:#dc2626;box-shadow:0 0 0 5px #fee2e2}
+.result{margin-top:18px}h2{margin:0 0 8px;font-size:14px}.output{min-height:62px;padding:14px;border:1px solid var(--line);border-radius:12px;background:white;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}.placeholder{color:#98a2b3}
+.note{margin:22px 0 0;color:var(--muted);font-size:12px;line-height:1.6}code{background:#eef2f7;padding:2px 5px;border-radius:5px}
+</style>
+</head>
+<body>
+<main>
+<p class="eyebrow">OpenAI · n8n</p>
+<h1>Voice Question Assistant</h1>
+<p class="intro">Hindi ya English mein apna question boliye. Audio n8n ko bheja jayega aur AI ka answer yahin text mein dikhega.</p>
+<div class="actions">
+<button id="startBtn" type="button">🎙️ Start recording</button>
+<button id="stopBtn" type="button" disabled>■ Stop &amp; get answer</button>
+<button id="clearBtn" type="button">Clear</button>
+</div>
+<div class="status" role="status" aria-live="polite"><span class="dot" id="statusDot"></span><span id="statusText">Ready. Start recording dabayein.</span></div>
+<section class="result"><h2>Your question</h2><div class="output" id="questionOutput"><span class="placeholder">Aapka transcribed question yahan aayega.</span></div></section>
+<section class="result"><h2>AI answer</h2><div class="output" id="answerOutput"><span class="placeholder">AI ka answer yahan aayega.</span></div></section>
+<p class="note">Use karne se pehle JavaScript mein <code>WEBHOOK_URL</code> ko apne n8n Webhook URL se replace karein. Microphone ke liye website HTTPS par host honi chahiye (ya localhost par chalni chahiye).</p>
+</main>
+<script>
+// Replace with your n8n Webhook URL.
+// Test example: http://localhost:5678/webhook-test/voice-question
+// Production example: https://YOUR-N8N-DOMAIN/webhook/voice-question
+const WEBHOOK_URL = "PASTE_YOUR_N8N_WEBHOOK_URL_HERE";
+const startBtn=document.getElementById("startBtn"),stopBtn=document.getElementById("stopBtn"),clearBtn=document.getElementById("clearBtn");
+const statusText=document.getElementById("statusText"),statusDot=document.getElementById("statusDot"),questionOutput=document.getElementById("questionOutput"),answerOutput=document.getElementById("answerOutput");
+let recorder=null,stream=null,chunks=[];
+function setStatus(message,recording=false){statusText.textContent=message;statusDot.classList.toggle("live",recording)}
+function placeholder(el,message){el.replaceChildren();const span=document.createElement("span");span.className="placeholder";span.textContent=message;el.appendChild(span)}
+function chooseMimeType(){if(!window.MediaRecorder)return "";const types=["audio/webm;codecs=opus","audio/webm","audio/mp4"];return types.find(t=>MediaRecorder.isTypeSupported(t))||""}
+startBtn.addEventListener("click",async()=>{
+ if(WEBHOOK_URL==="PASTE_YOUR_N8N_WEBHOOK_URL_HERE"){setStatus("Pehle code mein WEBHOOK_URL set karein.");return}
+ if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder){setStatus("Recording supported nahi hai. Updated Chrome/Edge aur HTTPS use karein.");return}
+ try{
+  stream=await navigator.mediaDevices.getUserMedia({audio:true});chunks=[];const mime=chooseMimeType();recorder=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);
+  recorder.addEventListener("dataavailable",e=>{if(e.data&&e.data.size)chunks.push(e.data)});
+  recorder.addEventListener("stop",sendAudio);recorder.start();startBtn.disabled=true;stopBtn.disabled=false;setStatus("Recording... Ab apna question boliye.",true);
+ }catch(e){console.error(e);setStatus("Microphone access nahi mila: "+e.message)}
+});
+stopBtn.addEventListener("click",()=>{if(recorder&&recorder.state!=="inactive"){stopBtn.disabled=true;setStatus("Recording stop ho rahi hai...");recorder.stop()}});
+async function sendAudio(){
+ stream?.getTracks().forEach(t=>t.stop());startBtn.disabled=true;stopBtn.disabled=true;
+ try{
+  if(!chunks.length)throw new Error("Audio record nahi hua. Dobara try karein.");
+  setStatus("Audio n8n ko bheja ja raha hai...");const mime=recorder.mimeType||chunks[0].type||"audio/webm",ext=mime.includes("mp4")?"mp4":"webm";
+  const blob=new Blob(chunks,{type:mime}),form=new FormData();form.append("audio",blob,"question."+ext);
+  const response=await fetch(WEBHOOK_URL,{method:"POST",body:form});const raw=await response.text();let data;
+  try{data=JSON.parse(raw)}catch{throw new Error("n8n ne JSON response nahi diya. Response: "+raw.slice(0,180))}
+  if(!response.ok)throw new Error(data.message||data.error||("HTTP "+response.status));
+  questionOutput.textContent=data.question||data.transcript||"Question response mein nahi mila.";
+  answerOutput.textContent=data.answer||data.text||"Answer response mein nahi mila.";setStatus("Done! Aapka answer ready hai.");
+ }catch(e){console.error(e);setStatus("Error: "+e.message+" — n8n execution aur Webhook URL check karein.")}
+ finally{startBtn.disabled=false;stopBtn.disabled=true;recorder=null;stream=null}
+}
+clearBtn.addEventListener("click",()=>{placeholder(questionOutput,"Aapka transcribed question yahan aayega.");placeholder(answerOutput,"AI ka answer yahan aayega.");setStatus("Ready. Start recording dabayein.")});
+</script>
+</body>
+</html>
